@@ -1,0 +1,78 @@
+name: Auto Create PR After Merge to Staging
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - staging
+
+jobs:
+  create_pr:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Check if PR already exists
+        id: check_pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          EXISTING_PR=$(gh pr list --base main --head staging --json number --jq '.[0].number')
+          
+          echo "pr_main_number=$EXISTING_PR" >> $GITHUB_OUTPUT
+
+      - name: Generating PR Content Template
+        id: pr_template
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ORIGINAL_BODY=$(gh pr view ${{ github.event.pull_request.number }} --json body --jq '.body')
+
+          { 
+            echo "pr_body<<EOF"
+            echo "$ORIGINAL_BODY"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+          { 
+            echo "pr_message<<EOF"
+            echo "This PR was created after PR #${{github.event.pull_request.number}} merged into staging."
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+          { 
+            echo "pr_update_message<<EOF"
+            echo "PR #${{github.event.pull_request.number}} was also merged into staging."
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Create Pull Request from staging to main
+        if: steps.check_pr.outputs.count == ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --base main \
+            --head staging \
+            --title "Auto PR: staging → main" \
+            --body $"${{ steps.pr_template.outputs.pr_message }}
+            
+            ---
+            
+            ${{ steps.pr_template.outputs.pr_body }}"
+
+      - name: Update existing PR
+        if: steps.check_pr.outputs.pr_main_number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CURRENT_BODY=$(gh pr view ${{ steps.check_pr.outputs.pr_main_number }} --json body --jq '.body')
+          gh pr edit "${{steps.check_pr.outputs.pr_main_number}}" --body $"$CURRENT_BODY
+          
+          ---
+
+          ${{ steps.pr_template.outputs.pr_update_message }}
+
+          ${{ steps.pr_template.outputs.pr_body }}"
